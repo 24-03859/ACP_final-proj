@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import messagebox
 import os
 from PIL import Image, ImageTk
+from sqlalchemy import Column, Integer, String, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 try:
     import pygame
@@ -16,7 +18,6 @@ def user_win(player, opponent):
     return (player == 'plant' and opponent == 'sun') or \
            (player == 'sun' and opponent == 'pests') or \
            (player == 'pests' and opponent == 'plant')
-
 
 def compute_result(user_choice, win_sound_path, lose_sound_path):
     choices = ['sun', 'plant', 'pests']
@@ -51,14 +52,17 @@ def compute_result(user_choice, win_sound_path, lose_sound_path):
 
     return result
 
-
 root = tk.Tk()
 root.title("Sun Plant Pests")
 root.geometry("520x380")
 root.configure(bg="#4AFF4A")
 
-
 base_path = os.path.dirname(__file__)
+
+data_dir = os.path.join(base_path, "DATA_ADMIN_ONLY_OY!!!")
+os.makedirs(data_dir, exist_ok=True)
+users_db_path = os.path.join(data_dir, "datasetsko.db")
+
 sun_img_path = os.path.join(base_path, "image", "sun.png")
 plant_img_path = os.path.join(base_path, "image", "plant.png")
 pests_img_path = os.path.join(base_path, "image", "pests.png")
@@ -80,7 +84,70 @@ def load_images():
 
 images = load_images()
 
-saved_users = []
+
+# ------ DATABASE CODE
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), unique=True, nullable=False)
+
+
+engine = create_engine(f"sqlite:///{users_db_path}", echo=False, future=True)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+Base.metadata.create_all(engine)
+
+
+def load_saved_users():
+    session = SessionLocal()
+    try:
+        rows = session.query(User).order_by(User.id).all()
+        return [row.username for row in rows]
+    except Exception as exc:
+        messagebox.showwarning("Database Error", f"Unable to load users:\n{exc}")
+        return []
+    finally:
+        session.close()
+
+def add_user_to_db(username):
+    session = SessionLocal()
+    try:
+        if session.query(User).filter_by(username=username).first():
+            return False
+        session.add(User(username=username))
+        session.commit()
+        return True
+    except Exception as exc:
+        session.rollback()
+        messagebox.showwarning("Database Error", f"Unable to save user:\n{exc}")
+        return False
+    finally:
+        session.close()
+
+def delete_user_from_db(username):
+    session = SessionLocal()
+    try:
+        user = session.query(User).filter_by(username=username).first()
+        if not user:
+            return False
+        session.delete(user)
+        session.commit()
+        return True
+    except Exception as exc:
+        session.rollback()
+        messagebox.showwarning("Database Error", f"Unable to delete user:\n{exc}")
+        return False
+    finally:
+        session.close()
+
+def reload_users():
+    global saved_users
+    saved_users = load_saved_users()
+
+saved_users = load_saved_users()
 
 main_frame = tk.Frame(root, bg="#4AFF4A")
 main_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -126,14 +193,12 @@ def show_add_user(): #TAPOS
     refresh_user_list()
 
 def update_username_display(): # DONEE
-    """Update the username display label with the current user"""
     if current_user:
         username_display.config(text=f"Playing as: {current_user}")
     else:
         username_display.config(text="Playing as: None")
 
 def set_current_user(username): # DONEE
-    """Set the active user and refresh UI"""
     global current_user
     if username in saved_users:
         current_user = username
@@ -145,12 +210,13 @@ def save_user(): # DONEE
     username = username_entry.get().strip()
     if username:
         if username not in saved_users:
-            saved_users.append(username)
-            current_user = username
-            username_entry.delete(0, tk.END)
-            refresh_user_list()
-            update_username_display()
-            messagebox.showinfo("Success", f"User '{username}' saved and set as current user!")
+            if add_user_to_db(username):
+                reload_users()
+                current_user = username
+                username_entry.delete(0, tk.END)
+                refresh_user_list()
+                update_username_display()
+                messagebox.showinfo("Success", f"User '{username}' saved and set as current user!")
         else:
             messagebox.showwarning("Warning", "Username already exists!")
     else:
@@ -159,11 +225,13 @@ def save_user(): # DONEE
 def delete_user(username): #TAPOS
     global current_user
     if username in saved_users:
-        saved_users.remove(username)
-        if current_user == username:
-            current_user = None
-        refresh_user_list()
-        update_username_display()
+        if delete_user_from_db(username):
+            reload_users()
+            if current_user == username:
+                current_user = None
+            refresh_user_list()
+            update_username_display()
+            messagebox.showinfo("Success", f"User '{username}' deleted.")
 
 def refresh_user_list(): # TAPOSSSA
     for widget in list_scrollable_frame.winfo_children():
@@ -227,6 +295,9 @@ def show_about(): #NEED SOME MODIFICATION
     options_frame.place_forget()
     about_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
 
+def quitting_this_game():
+    messagebox.showinfo("Bye", "Exit na")
+    root.quit()
 
 
 #------ MAIN CODES FOR INTERFACE
@@ -242,7 +313,7 @@ start_btn.place(relx=0.05, rely=0.15, relwidth=0.28, relheight=0.6)
 opt_btn = make_bordered_button(btn_row, "Option", show_options)
 opt_btn.place(relx=0.36, rely=0.15, relwidth=0.28, relheight=0.6)
 
-exit_btn = make_bordered_button(btn_row, "Exit", lambda: root.quit())
+exit_btn = make_bordered_button(btn_row, "Exit", quitting_this_game)
 exit_btn.place(relx=0.67, rely=0.15, relwidth=0.28, relheight=0.6)
 
 game_frame = tk.Frame(root, bg="#EFEFEF")
@@ -368,8 +439,7 @@ about_text_label = tk.Label(
 about_text_label.pack(fill="both", expand=True, padx=10, pady=10)
 
 about_back_btn = make_bordered_button(about_frame, "Back", show_options)
-about_back_btn.pack(pady=(0, 30))
-
+about_back_btn.place(relx=0.04, rely=0.1, anchor='w', relwidth=0.15, relheight=0.075)
 
 user_options_frame = tk.Frame(root, bg="#F2F2F2")
 
@@ -402,7 +472,6 @@ user_list_canvas.configure(yscrollcommand=user_list_scrollbar.set)
 
 user_list_canvas.pack(side="left", fill="both", expand=True)
 user_list_scrollbar.pack(side="right", fill="y")
-
 
 add_user_frame = tk.Frame(root, bg="#F2F2F2")
 
